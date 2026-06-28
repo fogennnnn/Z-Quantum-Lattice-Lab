@@ -671,17 +671,19 @@ export default function Z6Simulator() {
             ctx.fill();
 
             // Draw light connections between very close particles to show interactions (Z6 clustering)
-            if (scale > 0.8 && routingMode > 1) {
+            if (scale > 0.8 && routingMode > 1 && particles.length > 0) {
               ctx.strokeStyle = "rgba(69, 243, 255, 0.04)";
               ctx.beginPath();
               for (let j = 0; j < 5; j++) {
                 const index = Math.floor(Math.random() * particles.length);
                 const other = particles[index];
-                const dist = Math.hypot(p.x - other.x, p.y - other.y, p.z - other.z);
-                if (dist < 40) {
-                  const otherProj = project(other.x, other.y, other.z, width, height);
-                  ctx.moveTo(x, y);
-                  ctx.lineTo(otherProj.x, otherProj.y);
+                if (other) {
+                  const dist = Math.hypot(p.x - other.x, p.y - other.y, p.z - other.z);
+                  if (dist < 40) {
+                    const otherProj = project(other.x, other.y, other.z, width, height);
+                    ctx.moveTo(x, y);
+                    ctx.lineTo(otherProj.x, otherProj.y);
+                  }
                 }
               }
               ctx.stroke();
@@ -1753,23 +1755,30 @@ export default function Z6Simulator() {
               </div>
 
               <div className="flex flex-col gap-2 mt-1">
-                <div className="flex justify-between text-gray-400">
-                  <span>Yaw Angle (θ)</span>
-                  <span className="text-white font-mono font-bold">{(yaw * (180 / Math.PI)).toFixed(0)}°</span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max={Math.PI * 2}
-                  step="0.05"
-                  value={yaw % (Math.PI * 2)}
-                  disabled={autoRotate}
-                  onChange={(e) => {
-                    setYaw(parseFloat(e.target.value));
-                    yawRef.current = parseFloat(e.target.value);
-                  }}
-                  className={`w-full accent-[#45f3ff] ${autoRotate ? "opacity-30 cursor-not-allowed" : "cursor-pointer"}`}
-                />
+                {(() => {
+                  const normalizedYaw = ((yaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+                  return (
+                    <>
+                      <div className="flex justify-between text-gray-400">
+                        <span>Yaw Angle (θ)</span>
+                        <span className="text-white font-mono font-bold">{(normalizedYaw * (180 / Math.PI)).toFixed(0)}°</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max={Math.PI * 2}
+                        step="0.05"
+                        value={normalizedYaw}
+                        disabled={autoRotate}
+                        onChange={(e) => {
+                          setYaw(parseFloat(e.target.value));
+                          yawRef.current = parseFloat(e.target.value);
+                        }}
+                        className={`w-full accent-[#45f3ff] ${autoRotate ? "opacity-30 cursor-not-allowed" : "cursor-pointer"}`}
+                      />
+                    </>
+                  );
+                })()}
 
                 <div className="flex justify-between text-gray-400">
                   <span>Pitch Angle (φ)</span>
