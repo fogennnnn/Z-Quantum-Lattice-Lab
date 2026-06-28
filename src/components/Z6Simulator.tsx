@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Play, Pause, RotateCcw, Shield, Layers, HelpCircle, Activity, Eye, Flame, Compass, BarChart3, AlertCircle, CheckCircle2, FileJson, TrendingUp, Cpu } from "lucide-react";
+import { Play, Pause, RotateCcw, Shield, Layers, HelpCircle, Activity, Eye, Flame, Compass, BarChart3, AlertCircle, CheckCircle2, FileJson, TrendingUp, Cpu, Maximize2, Minimize2 } from "lucide-react";
 import { scaleLinear } from "d3-scale";
 import { SimParams, SimState } from "../types";
 
@@ -188,6 +188,43 @@ export default function Z6Simulator() {
   const paramsRef = useRef<SimParams>(params);
   const interactionsCountRef = useRef<number>(0);
 
+  // Advanced scientific tool states
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [pitch, setPitch] = useState<number>(0.3);
+  const [yaw, setYaw] = useState<number>(0.5);
+  const [autoRotate, setAutoRotate] = useState<boolean>(true);
+  const [budgetMode, setBudgetMode] = useState<"dynamic" | "stochastic" | "lock-6" | "lock-3" | "lock-1">("dynamic");
+  const [stochasticNoise, setStochasticNoise] = useState<number>(0.15);
+
+  const pitchRef = useRef(pitch);
+  const yawRef = useRef(yaw);
+  const autoRotateRef = useRef(autoRotate);
+  const budgetModeRef = useRef(budgetMode);
+  const stochasticNoiseRef = useRef(stochasticNoise);
+
+  const isDraggingRef = useRef(false);
+  const prevMouseRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    pitchRef.current = pitch;
+  }, [pitch]);
+
+  useEffect(() => {
+    yawRef.current = yaw;
+  }, [yaw]);
+
+  useEffect(() => {
+    autoRotateRef.current = autoRotate;
+  }, [autoRotate]);
+
+  useEffect(() => {
+    budgetModeRef.current = budgetMode;
+  }, [budgetMode]);
+
+  useEffect(() => {
+    stochasticNoiseRef.current = stochasticNoise;
+  }, [stochasticNoise]);
+
   // Space modes
   const [simSpaceMode, setSimSpaceMode] = useState<"quantum" | "matter">("quantum");
   const [latticeGridSize, setLatticeGridSize] = useState<number>(3);
@@ -306,19 +343,19 @@ export default function Z6Simulator() {
     // Watch for particle count change
     const currentParticlesCount = params.particlesCount;
 
-    // Rotation angles for 3D view
-    let angleX = 0.005;
-    let angleY = 0.008;
+    // Rotation angles for 3D view (references pitch and yaw states via refs)
+    let angleX = pitchRef.current;
+    let angleY = yawRef.current;
 
     // 3D Projection
     const project = (x: number, y: number, z: number, width: number, height: number) => {
-      // Rotate around X-axis
+      // Rotate around X-axis (pitch)
       const cosX = Math.cos(angleX);
       const sinX = Math.sin(angleX);
       let y1 = y * cosX - z * sinX;
       let z1 = y * sinX + z * cosX;
 
-      // Rotate around Y-axis
+      // Rotate around Y-axis (yaw)
       const cosY = Math.cos(angleY);
       const sinY = Math.sin(angleY);
       let x2 = x * cosY + z1 * sinY;
@@ -350,18 +387,42 @@ export default function Z6Simulator() {
       ctx.fillStyle = "#0c0d12";
       ctx.fillRect(0, 0, width, height);
 
-      // Slow rotation over time
-      angleX += 0.003;
-      angleY += 0.002;
+      // Rotate based on autoRotate or user drag
+      if (autoRotateRef.current) {
+        yawRef.current += 0.002;
+        pitchRef.current = 0.35 + Math.sin(time * 0.0004) * 0.15; // Smooth tilting oscillation
+      }
+      
+      // Update local angle projection variables
+      angleX = pitchRef.current;
+      angleY = yawRef.current;
 
       const pParams = paramsRef.current;
       const currentDt = pParams.dt;
       
-      // Determine physical constraint states based on transition lag (dt)
-      // dt defines turn budgets. Let's implement the discrete routing constraints
+      // Determine physical constraint states based on transition lag (dt) and budget coupling modes
       let routingMode: 6 | 3 | 1 = 6;
-      if (currentDt < 2.0) routingMode = 1;
-      else if (currentDt < 5.0) routingMode = 3;
+      const bMode = budgetModeRef.current;
+      if (bMode === "lock-6") {
+        routingMode = 6;
+      } else if (bMode === "lock-3") {
+        routingMode = 3;
+      } else if (bMode === "lock-1") {
+        routingMode = 1;
+      } else if (bMode === "stochastic") {
+        // Perturb the effective lag stochastically to simulate heat or quantum flux
+        const noiseVal = stochasticNoiseRef.current;
+        const perturbation = (Math.sin(time * 0.005) + Math.sin(time * 0.013)) * 4.5 * noiseVal;
+        const effectiveDt = Math.max(1.0, Math.min(15.0, currentDt + perturbation));
+        if (effectiveDt < 2.0) routingMode = 1;
+        else if (effectiveDt < 5.0) routingMode = 3;
+        else routingMode = 6;
+      } else {
+        // Default Dynamic (Lag-Bound)
+        if (currentDt < 2.0) routingMode = 1;
+        else if (currentDt < 5.0) routingMode = 3;
+        else routingMode = 6;
+      }
 
       // Update and Draw Particles
       const projectedList = [];
@@ -1026,11 +1087,25 @@ export default function Z6Simulator() {
         localFrameCount = 0;
         lastFpsUpdateTime = now;
 
-        setState(prev => ({
-          ...prev,
-          fps: measuredFps,
-          interactionsCount: interactionsCountRef.current,
-        }));
+        setState(prev => {
+          let calculatedActiveAxes = ["X+", "X-", "Y+", "Y-", "Z+", "Z-"];
+          let calculatedTurnBudget = 90;
+          if (routingMode === 1) {
+            calculatedActiveAxes = ["Z+"];
+            calculatedTurnBudget = 0;
+          } else if (routingMode === 3) {
+            calculatedActiveAxes = ["Z+", "Z-", "X+"];
+            calculatedTurnBudget = 30;
+          }
+          return {
+            ...prev,
+            fps: measuredFps,
+            interactionsCount: interactionsCountRef.current,
+            routingCount: routingMode,
+            activeAxes: calculatedActiveAxes,
+            turnBudget: calculatedTurnBudget,
+          };
+        });
       }
 
       lastTime = time;
@@ -1053,31 +1128,103 @@ export default function Z6Simulator() {
       v: 1.0,
       particlesCount: 400,
     });
+    setBudgetMode("dynamic");
+    setAutoRotate(true);
+    setPitch(0.3);
+    setYaw(0.5);
     setState(prev => ({
       ...prev,
       interactionsCount: 0,
     }));
   };
 
+  const loadScenario = (scenario: "relaxed" | "prolate" | "floor" | "supercritical") => {
+    interactionsCountRef.current = 0;
+    setAutoRotate(true);
+    if (scenario === "relaxed") {
+      setParams({
+        dt: 10.0,
+        tau: 1.0,
+        L: 5.0,
+        v: 1.0,
+        particlesCount: 400,
+      });
+      setBudgetMode("dynamic");
+    } else if (scenario === "prolate") {
+      setParams({
+        dt: 3.5,
+        tau: 1.0,
+        L: 2.4,
+        v: 1.0,
+        particlesCount: 400,
+      });
+      setBudgetMode("dynamic");
+    } else if (scenario === "floor") {
+      setParams({
+        dt: 1.2,
+        tau: 1.0,
+        L: 1.0,
+        v: 1.0,
+        particlesCount: 400,
+      });
+      setBudgetMode("dynamic");
+    } else if (scenario === "supercritical") {
+      setParams({
+        dt: 6.0,
+        tau: 1.0,
+        L: 1.5,
+        v: 1.6,
+        particlesCount: 600,
+      });
+      setBudgetMode("stochastic");
+      setStochasticNoise(0.45);
+    }
+  };
+
   return (
-    <div id="z6-simulator-container" className="bg-[#11141a] border border-[#1f2833]/60 rounded-xl p-5 shadow-2xl overflow-hidden relative flex flex-col h-full min-h-[580px]">
+    <div
+      id="z6-simulator-container"
+      className={`overflow-hidden relative flex flex-col transition-all duration-300 ${
+        isFullscreen
+          ? "fixed inset-0 z-50 bg-[#0c0d12] p-6 h-screen w-screen"
+          : "bg-[#11141a] border border-[#1f2833]/60 rounded-xl p-5 shadow-2xl h-full min-h-[580px]"
+      }`}
+    >
       {/* Title Header */}
       <div className="flex items-center justify-between border-b border-[#1f2833]/40 pb-4 mb-4">
         <div className="flex items-center gap-2">
           <Activity className="w-5 h-5 text-[#45f3ff] animate-pulse" />
-          <h2 className="font-bold text-lg text-white font-mono tracking-tight">
-            6D Lattice Phase Transition Simulator
+          <h2 className="font-bold text-base md:text-lg text-white font-mono tracking-tight">
+            6D Lattice Phase Transition Simulator {isFullscreen && <span className="text-xs text-[#45f3ff] bg-[#45f3ff]/10 px-2 py-0.5 rounded font-bold uppercase ml-2 animate-pulse">Fullscreen Console Mode</span>}
           </h2>
         </div>
         <div className="flex gap-2">
           <button
+            id="fullscreen-toggle-btn"
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="p-1.5 rounded bg-[#1f2833]/40 text-[#c5c6c7] hover:text-[#45f3ff] hover:bg-[#1f2833]/85 transition-all flex items-center gap-1.5 text-xs font-mono cursor-pointer"
+            title={isFullscreen ? "Exit Fullscreen Console" : "Enter Fullscreen Console"}
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Minimize</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Fullscreen</span>
+              </>
+            )}
+          </button>
+          <button
             id="explain-toggle-btn"
             onClick={() => setShowExplanation(!showExplanation)}
-            className="p-1.5 rounded bg-[#1f2833]/40 text-[#c5c6c7] hover:text-[#45f3ff] transition-all flex items-center gap-1.5 text-xs font-mono"
+            className="p-1.5 rounded bg-[#1f2833]/40 text-[#c5c6c7] hover:text-[#45f3ff] transition-all flex items-center gap-1.5 text-xs font-mono cursor-pointer"
             title="Explain Z6 Turn Budget"
           >
             <HelpCircle className="w-4 h-4" />
-            <span>Core Math</span>
+            <span className="hidden sm:inline">Core Math</span>
           </button>
         </div>
       </div>
@@ -1167,7 +1314,61 @@ export default function Z6Simulator() {
         <div className="flex-1 flex flex-col md:flex-row gap-5">
           {/* Left Interactive Canvas Panel */}
           <div className="flex-1 flex flex-col relative bg-[#0c0d12] border border-[#1f2833]/30 rounded-lg overflow-hidden min-h-[300px]">
-            <canvas ref={canvasRef} className="w-full flex-1" />
+            <canvas
+              ref={canvasRef}
+              className="w-full flex-1 cursor-grab active:cursor-grabbing touch-none"
+              onMouseDown={(e) => {
+                isDraggingRef.current = true;
+                prevMouseRef.current = { x: e.clientX, y: e.clientY };
+                setAutoRotate(false);
+              }}
+              onMouseMove={(e) => {
+                if (!isDraggingRef.current) return;
+                const deltaX = e.clientX - prevMouseRef.current.x;
+                const deltaY = e.clientY - prevMouseRef.current.y;
+                
+                // Add deltas to yaw and pitch
+                yawRef.current += deltaX * 0.007;
+                pitchRef.current += deltaY * 0.007;
+                pitchRef.current = Math.max(-1.4, Math.min(1.4, pitchRef.current)); // Clamp pitch slightly away from poles to avoid Gimbal lock
+                
+                prevMouseRef.current = { x: e.clientX, y: e.clientY };
+                
+                // Sync state so React sliders update live during interaction
+                setYaw(yawRef.current);
+                setPitch(pitchRef.current);
+              }}
+              onMouseUp={() => {
+                isDraggingRef.current = false;
+              }}
+              onMouseLeave={() => {
+                isDraggingRef.current = false;
+              }}
+              onTouchStart={(e) => {
+                if (e.touches.length === 1) {
+                  isDraggingRef.current = true;
+                  prevMouseRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                  setAutoRotate(false);
+                }
+              }}
+              onTouchMove={(e) => {
+                if (!isDraggingRef.current || e.touches.length !== 1) return;
+                const deltaX = e.touches[0].clientX - prevMouseRef.current.x;
+                const deltaY = e.touches[0].clientY - prevMouseRef.current.y;
+                
+                yawRef.current += deltaX * 0.007;
+                pitchRef.current += deltaY * 0.007;
+                pitchRef.current = Math.max(-1.4, Math.min(1.4, pitchRef.current));
+                
+                prevMouseRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                
+                setYaw(yawRef.current);
+                setPitch(pitchRef.current);
+              }}
+              onTouchEnd={() => {
+                isDraggingRef.current = false;
+              }}
+            />
             
             {/* Real-time Indicator Overlay */}
             <div className="absolute top-3 left-3 bg-[#11141a]/90 backdrop-blur-md border border-[#1f2833]/80 rounded p-3 font-mono text-xs flex flex-col gap-1.5 shadow-lg select-none z-10">
@@ -1228,14 +1429,78 @@ export default function Z6Simulator() {
             </div>
           </div>
 
-          {/* Right Controls Panel */}
-          <div className="w-full md:w-[260px] flex flex-col gap-4">
+          {/* Right Controls Panel - Scientific Console */}
+          <div className="w-full md:w-[280px] lg:w-[320px] shrink-0 flex flex-col gap-4 overflow-y-auto pr-1 select-none">
             
+            {/* Scenarios Preset Boundaries */}
+            <div className="bg-[#151922] border border-[#1f2833]/40 rounded-lg p-4 flex flex-col gap-3 font-mono text-xs">
+              <h3 className="font-bold text-[#45f3ff] uppercase tracking-wider border-b border-[#1f2833]/30 pb-1.5 flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5" />
+                Physical Boundaries
+              </h3>
+              <p className="text-[10px] text-gray-400 leading-normal">
+                Load key discrete limits of the Z6 parity manifold:
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  id="scenario-relaxed-btn"
+                  onClick={() => loadScenario("relaxed")}
+                  className={`p-1.5 rounded border text-left transition-all cursor-pointer flex flex-col justify-between h-[52px] ${
+                    params.dt >= 5.0 && budgetMode === "dynamic"
+                      ? "bg-green-500/10 border-green-500 text-white"
+                      : "bg-[#0c0d12] border-[#1f2833]/40 text-gray-400 hover:border-gray-500"
+                  }`}
+                >
+                  <span className="font-bold text-[10px] text-green-400">1. Isotropic</span>
+                  <span className="text-[9px] text-gray-500 leading-none">6-Axis Open</span>
+                </button>
+
+                <button
+                  id="scenario-prolate-btn"
+                  onClick={() => loadScenario("prolate")}
+                  className={`p-1.5 rounded border text-left transition-all cursor-pointer flex flex-col justify-between h-[52px] ${
+                    params.dt >= 2.0 && params.dt < 5.0 && budgetMode === "dynamic"
+                      ? "bg-yellow-500/10 border-yellow-500 text-white"
+                      : "bg-[#0c0d12] border-[#1f2833]/40 text-gray-400 hover:border-gray-500"
+                  }`}
+                >
+                  <span className="font-bold text-[10px] text-yellow-400">2. Prolate</span>
+                  <span className="text-[9px] text-gray-500 leading-none">3-Axis Squeeze</span>
+                </button>
+
+                <button
+                  id="scenario-floor-btn"
+                  onClick={() => loadScenario("floor")}
+                  className={`p-1.5 rounded border text-left transition-all cursor-pointer flex flex-col justify-between h-[52px] ${
+                    params.dt < 2.0 && budgetMode === "dynamic"
+                      ? "bg-red-500/10 border-red-500 text-white"
+                      : "bg-[#0c0d12] border-[#1f2833]/40 text-gray-400 hover:border-gray-500"
+                  }`}
+                >
+                  <span className="font-bold text-[10px] text-red-400">3. Confined</span>
+                  <span className="text-[9px] text-gray-500 leading-none">1-Axis Floor</span>
+                </button>
+
+                <button
+                  id="scenario-supercritical-btn"
+                  onClick={() => loadScenario("supercritical")}
+                  className={`p-1.5 rounded border text-left transition-all cursor-pointer flex flex-col justify-between h-[52px] ${
+                    budgetMode === "stochastic"
+                      ? "bg-purple-500/10 border-purple-500 text-white"
+                      : "bg-[#0c0d12] border-[#1f2833]/40 text-gray-400 hover:border-gray-500"
+                  }`}
+                >
+                  <span className="font-bold text-[10px] text-purple-400">4. Fluctuating</span>
+                  <span className="text-[9px] text-gray-500 leading-none">Quantum Noise</span>
+                </button>
+              </div>
+            </div>
+
             {/* Controls Card */}
             <div className="bg-[#151922] border border-[#1f2833]/40 rounded-lg p-4 flex flex-col gap-4 font-mono text-xs">
               <h3 className="font-bold text-white uppercase tracking-wider border-b border-[#1f2833]/30 pb-1.5 flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-[#45f3ff]" />
-                Physical Inputs
+                Physical Sliders
               </h3>
 
               {/* Slider 1: dt (Transition Lag) */}
@@ -1304,11 +1569,11 @@ export default function Z6Simulator() {
                     id="nodes-manual-input"
                     type="number"
                     min="100"
-                    max="100000000"
+                    max="100000"
                     step="100"
                     value={params.particlesCount}
                     onChange={(e) => {
-                      const val = Math.max(100, Math.min(100000000, parseInt(e.target.value) || 100));
+                      const val = Math.max(100, Math.min(100000, parseInt(e.target.value) || 100));
                       setParams(p => ({ ...p, particlesCount: val }));
                     }}
                     className="bg-[#0c0d12] border border-[#1f2833]/40 rounded px-1.5 py-0.5 text-white font-bold text-right font-mono w-24 text-[11px] focus:border-[#45f3ff] focus:outline-none"
@@ -1318,7 +1583,7 @@ export default function Z6Simulator() {
                   id="nodes-slider"
                   type="range"
                   min="2"
-                  max="8"
+                  max="5"
                   step="0.05"
                   value={Math.log10(params.particlesCount)}
                   onChange={(e) => {
@@ -1328,36 +1593,14 @@ export default function Z6Simulator() {
                       val = Math.round(val / 50) * 50;
                     } else if (val < 10000) {
                       val = Math.round(val / 500) * 500;
-                    } else if (val < 100000) {
-                      val = Math.round(val / 5000) * 5000;
-                    } else if (val < 1000000) {
-                      val = Math.round(val / 50000) * 50000;
-                    } else if (val < 1000000) {
-                      val = Math.round(val / 500000) * 500000;
                     } else {
-                      val = Math.round(val / 5000000) * 5000000;
+                      val = Math.round(val / 5000) * 5000;
                     }
-                    val = Math.max(100, Math.min(100000000, val));
+                    val = Math.max(100, Math.min(100000, val));
                     setParams(p => ({ ...p, particlesCount: val }));
                   }}
                   className="w-full accent-[#45f3ff] cursor-pointer"
                 />
-                <div className="flex justify-between gap-1 text-[9px] font-mono mt-1 overflow-x-auto py-0.5">
-                  {[100, 10000, 1000000, 10000000, 100000000].map(preset => (
-                    <button
-                      key={preset}
-                      id={`preset-${preset}`}
-                      onClick={() => setParams(p => ({ ...p, particlesCount: preset }))}
-                      className={`px-1.5 py-0.5 rounded border transition-all cursor-pointer whitespace-nowrap ${
-                        params.particlesCount === preset
-                          ? 'bg-[#45f3ff]/20 border-[#45f3ff] text-white font-bold'
-                          : 'bg-[#0c0d12]/60 border-[#1f2833]/40 text-gray-500 hover:text-white hover:border-[#1f2833]'
-                      }`}
-                    >
-                      {preset >= 100000000 ? '100M' : preset >= 10000000 ? '10M' : preset >= 1000000 ? '1M' : preset >= 1000 ? `${preset / 1000}k` : preset}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {/* Simulation Space Mode & Lattice Size */}
@@ -1370,7 +1613,7 @@ export default function Z6Simulator() {
                       onClick={() => setSimSpaceMode("quantum")}
                       className={`py-1.5 px-2 rounded text-xs font-bold transition-all cursor-pointer ${
                         simSpaceMode === "quantum"
-                          ? "bg-[#45f3ff]/10 border border-[#45f3ff] text-[#45f3ff]"
+                          ? "bg-[#45f3ff]/10 border border-[#45f3ff]/30 text-[#45f3ff]"
                           : "bg-[#0c0d12]/40 border border-[#1f2833]/30 text-gray-400 hover:text-white hover:bg-[#1f2833]/20"
                       }`}
                     >
@@ -1406,28 +1649,25 @@ export default function Z6Simulator() {
                       onChange={(e) => setLatticeGridSize(parseInt(e.target.value))}
                       className="w-full accent-purple-500 cursor-pointer"
                     />
-                    <span className="text-[10px] text-gray-500 leading-tight">
-                      Simulates a massive crystalline structure of {latticeGridSize * latticeGridSize * latticeGridSize} nodes. Compressing under Z6 limits demonstrates high-symmetry spatial shedding.
-                    </span>
                   </div>
                 )}
               </div>
 
               {/* Play/Pause Button Group */}
-              <div className="grid grid-cols-2 gap-2 pt-2">
+              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-[#1f2833]/20">
                 <button
                   id="play-pause-btn"
                   onClick={() => setIsRunning(!isRunning)}
-                  className={`py-2 px-3 rounded font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${isRunning ? 'bg-amber-500/15 border border-amber-500/40 text-amber-400 hover:bg-amber-500/25' : 'bg-green-500/15 border border-green-500/40 text-green-400 hover:bg-green-500/25'}`}
+                  className={`py-1.5 px-2 rounded font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer ${isRunning ? 'bg-amber-500/15 border border-amber-500/40 text-amber-400 hover:bg-amber-500/25' : 'bg-green-500/15 border border-green-500/40 text-green-400 hover:bg-green-500/25'}`}
                 >
                   {isRunning ? (
                     <>
-                      <Pause className="w-3.5 h-3.5" />
+                      <Pause className="w-3 h-3" />
                       <span>Pause</span>
                     </>
                   ) : (
                     <>
-                      <Play className="w-3.5 h-3.5" />
+                      <Play className="w-3 h-3" />
                       <span>Resume</span>
                     </>
                   )}
@@ -1436,29 +1676,139 @@ export default function Z6Simulator() {
                 <button
                   id="reset-btn"
                   onClick={resetSim}
-                  className="py-2 px-3 rounded font-bold bg-[#1f2833]/40 border border-[#1f2833]/80 text-[#c5c6c7] hover:bg-[#1f2833]/80 hover:text-white transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="py-1.5 px-2 rounded font-bold text-xs bg-[#1f2833]/40 border border-[#1f2833]/80 text-[#c5c6c7] hover:bg-[#1f2833]/80 hover:text-white transition-all flex items-center justify-center gap-1 cursor-pointer"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
+                  <RotateCcw className="w-3 h-3" />
                   <span>Reset</span>
                 </button>
               </div>
             </div>
 
+            {/* Budget Coupling Mode Selection */}
+            <div className="bg-[#151922] border border-[#1f2833]/40 rounded-lg p-4 flex flex-col gap-3 font-mono text-xs">
+              <h3 className="font-bold text-white uppercase tracking-wider border-b border-[#1f2833]/30 pb-1.5 flex items-center gap-1.5">
+                <Compass className="w-3.5 h-3.5 text-[#45f3ff]" />
+                Budget Coupling Model
+              </h3>
+              
+              <div className="flex flex-col gap-1.5">
+                <select
+                  value={budgetMode}
+                  onChange={(e) => setBudgetMode(e.target.value as any)}
+                  className="bg-[#0c0d12] border border-[#1f2833]/60 rounded px-2.5 py-1.5 text-white font-bold w-full focus:border-[#45f3ff] focus:outline-none cursor-pointer"
+                >
+                  <option value="dynamic">Lag-Bound (Dynamic γ)</option>
+                  <option value="stochastic">Stochastic (Quantum Noise)</option>
+                  <option value="lock-6">Force Isotropic (6 axes)</option>
+                  <option value="lock-3">Force Prolate (3 axes)</option>
+                  <option value="lock-1">Force Confined (1 axis)</option>
+                </select>
+                <p className="text-[10px] text-gray-500 leading-normal">
+                  {budgetMode === "dynamic" && "Turn budget collapses naturally in discrete steps as transition lag approaches operational floor."}
+                  {budgetMode === "stochastic" && "Adds stochastic thermal fluctuation to turn budget to simulate hot/decohered systems."}
+                  {budgetMode === "lock-6" && "Overrides standard limits. Force-locks Spacetime to full 6-axis isotropic volume symmetry."}
+                  {budgetMode === "lock-3" && "Overrides standard limits. Force-locks Spacetime into prolate cylindrical compression."}
+                  {budgetMode === "lock-1" && "Overrides standard limits. Force-locks Spacetime to straight 1-axis linear translation."}
+                </p>
+              </div>
+
+              {budgetMode === "stochastic" && (
+                <div className="flex flex-col gap-1 mt-1 border-t border-[#1f2833]/20 pt-2">
+                  <div className="flex justify-between text-[#959ba3]">
+                    <span>Fluctuation Intensity</span>
+                    <span className="text-white font-bold">{(stochasticNoise * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="0.8"
+                    step="0.02"
+                    value={stochasticNoise}
+                    onChange={(e) => setStochasticNoise(parseFloat(e.target.value))}
+                    className="w-full accent-purple-500 cursor-pointer text-purple-400"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* 3D Rotation Matrix control */}
+            <div className="bg-[#151922] border border-[#1f2833]/40 rounded-lg p-4 flex flex-col gap-3 font-mono text-xs">
+              <h3 className="font-bold text-white uppercase tracking-wider border-b border-[#1f2833]/30 pb-1.5 flex items-center gap-1.5">
+                <TrendingUp className="w-3.5 h-3.5 text-purple-400" />
+                Lattice Orientation
+              </h3>
+
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-[11px]">Auto-Rotate Sweep</span>
+                <button
+                  onClick={() => setAutoRotate(!autoRotate)}
+                  className={`px-2.5 py-1 rounded font-bold text-[10px] transition-all cursor-pointer ${
+                    autoRotate
+                      ? 'bg-purple-500/10 border border-purple-500 text-purple-400 shadow-[0_0_6px_rgba(168,85,247,0.15)]'
+                      : 'bg-[#0c0d12] border border-[#1f2833]/40 text-gray-500'
+                  }`}
+                >
+                  {autoRotate ? 'ACTIVE' : 'LOCKED'}
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-2 mt-1">
+                <div className="flex justify-between text-gray-400">
+                  <span>Yaw Angle (θ)</span>
+                  <span className="text-white font-mono font-bold">{(yaw * (180 / Math.PI)).toFixed(0)}°</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max={Math.PI * 2}
+                  step="0.05"
+                  value={yaw % (Math.PI * 2)}
+                  disabled={autoRotate}
+                  onChange={(e) => {
+                    setYaw(parseFloat(e.target.value));
+                    yawRef.current = parseFloat(e.target.value);
+                  }}
+                  className={`w-full accent-[#45f3ff] ${autoRotate ? "opacity-30 cursor-not-allowed" : "cursor-pointer"}`}
+                />
+
+                <div className="flex justify-between text-gray-400">
+                  <span>Pitch Angle (φ)</span>
+                  <span className="text-white font-mono font-bold">{(pitch * (180 / Math.PI)).toFixed(0)}°</span>
+                </div>
+                <input
+                  type="range"
+                  min="-1.4"
+                  max="1.4"
+                  step="0.05"
+                  value={pitch}
+                  disabled={autoRotate}
+                  onChange={(e) => {
+                    setPitch(parseFloat(e.target.value));
+                    pitchRef.current = parseFloat(e.target.value);
+                  }}
+                  className={`w-full accent-[#45f3ff] ${autoRotate ? "opacity-30 cursor-not-allowed" : "cursor-pointer"}`}
+                />
+                <span className="text-[9px] text-gray-500 leading-normal">
+                  💡 Drag anywhere on the 3D visualizer canvas to rotate directly!
+                </span>
+              </div>
+            </div>
+
             {/* Active Axes Visualization */}
-            <div className="bg-[#151922] border border-[#1f2833]/40 rounded-lg p-4 font-mono text-xs flex flex-col gap-2.5 flex-1 justify-between">
+            <div className="bg-[#151922] border border-[#1f2833]/40 rounded-lg p-4 font-mono text-xs flex flex-col gap-2.5">
               <h3 className="font-bold text-white uppercase tracking-wider border-b border-[#1f2833]/30 pb-1.5 flex items-center gap-1.5">
                 <Shield className="w-3.5 h-3.5 text-[#45f3ff]" />
                 Admissible Axes
               </h3>
 
-              <div className="grid grid-cols-3 gap-2 py-1">
+              <div className="grid grid-cols-3 gap-1.5 py-1">
                 {["X+", "X-", "Y+", "Y-", "Z+", "Z-"].map(axis => {
                   const isActive = state.activeAxes.includes(axis) || (state.routingCount === 3 && (axis === "Z+" || axis === "Z-" || axis === "X+"));
                   const isPrivileged = axis.startsWith("Z");
                   return (
                     <div
                       key={axis}
-                      className={`p-1.5 rounded text-center border font-bold transition-all ${
+                      className={`p-1 rounded text-center border font-bold transition-all text-[11px] ${
                         isActive 
                           ? isPrivileged 
                             ? 'bg-blue-500/20 border-blue-500/60 text-blue-300 shadow-[0_0_8px_rgba(59,130,246,0.2)]'
@@ -1472,7 +1822,7 @@ export default function Z6Simulator() {
                 })}
               </div>
 
-              <div className="bg-[#0c0d12] border border-[#1f2833]/20 rounded p-2 text-[11px] leading-normal text-[#959ba3]">
+              <div className="bg-[#0c0d12] border border-[#1f2833]/20 rounded p-2 text-[10px] leading-normal text-[#959ba3]">
                 {state.routingCount === 6 && (
                   <p><strong>Isotropic (3D space open):</strong> Standard high-transition space. Full symmetry exists.</p>
                 )}
@@ -1483,10 +1833,61 @@ export default function Z6Simulator() {
                   <p><strong className="text-red-400">Operational Floor:</strong> Complete confinement. Straight translation only.</p>
                 )}
               </div>
+            </div>
 
-              <div className="text-[10px] text-gray-500 text-center border-t border-[#1f2833]/20 pt-2 flex justify-between items-center">
-                <span>Cumulative Steps:</span>
-                <span className="text-white font-mono">{Math.round(state.interactionsCount).toLocaleString()}</span>
+            {/* Expanded Scientific Telemetry Section */}
+            <div className="bg-[#151922] border border-[#1f2833]/40 rounded-lg p-4 font-mono text-xs flex flex-col gap-2">
+              <h3 className="font-bold text-white uppercase tracking-wider border-b border-[#1f2833]/30 pb-1.5 flex items-center gap-1.5">
+                <BarChart3 className="w-3.5 h-3.5 text-blue-400" />
+                Spacetime Telemetry
+              </h3>
+
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between items-center py-0.5 border-b border-[#1f2833]/10">
+                  <span className="text-[#959ba3]">Geometric Entropy (S_geo):</span>
+                  <span className="text-white font-bold">
+                    {Math.max(0, Math.log(state.routingCount)).toFixed(5)} e.u.
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5 border-b border-[#1f2833]/10">
+                  <span className="text-[#959ba3]">Coupling Factor (γ):</span>
+                  <span className="text-white font-bold">{state.gamma.toFixed(5)}</span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5 border-b border-[#1f2833]/10">
+                  <span className="text-[#959ba3]">Buffer Capacity Margin:</span>
+                  <span className="text-[#45f3ff] font-bold">{(1.0 - state.gamma).toFixed(5)}</span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5 border-b border-[#1f2833]/10">
+                  <span className="text-[#959ba3]">Cabibbo Shear Projection:</span>
+                  <span className="text-white font-bold">{(2/9 * state.gamma).toFixed(5)} rad</span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5 border-b border-[#1f2833]/10">
+                  <span className="text-[#959ba3]">Geometric Drift Offset:</span>
+                  <span className="text-yellow-400 font-bold">
+                    {(state.routingCount === 6 ? 1.62 : state.routingCount === 3 ? 7.13 : 45.2).toFixed(2)} ppm
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5 border-b border-[#1f2833]/10">
+                  <span className="text-[#959ba3]">Mass Factor Scaling (Π_Z):</span>
+                  <span className="text-white font-bold">3.12579</span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5 border-b border-[#1f2833]/10">
+                  <span className="text-[#959ba3]">Node Volumetric Density:</span>
+                  <span className="text-white font-bold">
+                    {(params.particlesCount / Math.pow(params.L, 3)).toFixed(3)} /nm³
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-[#959ba3]">Steps Processed:</span>
+                  <span className="text-white font-bold">{Math.round(state.interactionsCount).toLocaleString()}</span>
+                </div>
               </div>
             </div>
 
