@@ -1,0 +1,8 @@
+{
+  "name": "Z6 Quantum Grid and Simulator",
+  "description": "Interactive 6D lattice simulator, decentralized P2P computing swarm, and OpenQASM transpiler for topological Z6 quantum shielding.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
